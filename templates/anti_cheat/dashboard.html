@@ -1,0 +1,784 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<link rel="stylesheet" href="{{ request.script_root }}/plugins/anti_cheat/assets/monitor.css">
+
+{# ── Pre-compute counts ── #}
+{% set ns = namespace(high=0, mid=0, low=0, all_dets=[]) %}
+{% for s in suspects %}
+  {% if s.score >= 70 %}{% set ns.high = ns.high + 1 %}
+  {% elif s.score >= 35 %}{% set ns.mid = ns.mid + 1 %}
+  {% else %}{% set ns.low = ns.low + 1 %}{% endif %}
+  {% for det in s.get('detectors', {}).keys() %}
+    {% if det not in ns.all_dets %}{% set ns.all_dets = ns.all_dets + [det] %}{% endif %}
+  {% endfor %}
+{% endfor %}
+{% set total = suspects|length + genuine_users|length %}
+{% set susp_pct  = ((suspects|length / total * 100)|int) if total > 0 else 0 %}
+{% set clean_pct = ((genuine_users|length / total * 100)|int) if total > 0 else 0 %}
+
+{# ════ SUB-HEADER ════ #}
+<div class="cm-root">
+<div class="cm-subheader">
+  <div class="cm-brand">
+    <div class="cm-brand-dot"></div>
+    Anti-Cheat
+  </div>
+
+  <div class="cm-stats-group">
+    <div class="cm-pill danger"><span class="pv">{{ suspects|length }}</span> Suspects</div>
+    <div class="cm-pill success"><span class="pv">{{ genuine_users|length }}</span> Clean</div>
+    <div class="cm-pill primary"><span class="pv">{{ total_events }}</span> Events</div>
+    <div class="cm-pill warning"><span class="pv">{{ detector_status|selectattr('enabled')|list|length }}</span> Detectors</div>
+  </div>
+
+  <div class="cm-sev-group">
+    <span class="badge badge-danger" style="font-size:.68rem">💀 {{ ns.high }} High</span>
+    <span class="badge badge-warning" style="font-size:.68rem">⚠ {{ ns.mid }} Med</span>
+    <span class="badge badge-secondary" style="font-size:.68rem">{{ ns.low }} Low</span>
+  </div>
+
+  <div class="cm-subheader-right">
+    {% if admins_hidden %}
+      <a href="?show_admins=1" class="btn btn-xs btn-outline-secondary">Show Admins</a>
+    {% else %}
+      <a href="?" class="btn btn-xs btn-outline-secondary">Hide Admins</a>
+    {% endif %}
+    <button id="btn-run-all" class="btn btn-xs btn-success">▶ Run All</button>
+    <a href="{{ url_for('anti_cheat.config_page') }}" class="btn btn-xs btn-outline-secondary">⚙ Settings</a>
+    <a href="{{ url_for('anti_cheat.export_csv') }}{% if not admins_hidden %}?show_admins=1{% endif %}" class="btn btn-xs btn-outline-secondary">↓ CSV</a>
+    <a href="{{ url_for('anti_cheat.export_pdf') }}{% if not admins_hidden %}?show_admins=1{% endif %}" class="btn btn-xs btn-outline-secondary">↓ PDF</a>
+    <button id="btn-reset" class="btn btn-xs btn-outline-danger">🗑 Reset</button>
+  </div>
+</div>
+
+{# ════ TABS ════ #}
+<ul class="nav nav-tabs cm-tabs" id="cmTabNav">
+  <li class="nav-item">
+    <a class="nav-link active" data-toggle="tab" href="#tab-suspects">
+      🚨 Suspects <span class="badge badge-danger ml-1">{{ suspects|length }}</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-toggle="tab" href="#tab-detectors">
+      🔍 Detectors <span class="badge badge-secondary ml-1">{{ detector_status|length }}</span>
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" data-toggle="tab" href="#tab-genuine">
+      ✅ Genuine <span class="badge badge-success ml-1">{{ genuine_users|length }}</span>
+    </a>
+  </li>
+</ul>
+
+<div class="tab-content">
+
+  {# ════ TAB: Suspects ════ #}
+  <div class="tab-pane fade show active" id="tab-suspects">
+    {% if suspects %}
+
+    {# Toolbar #}
+    <div class="cm-toolbar">
+      {# Search #}
+      <div class="cm-search-wrap">
+        <i class="fa fa-search" style="position:absolute;left:.6rem;top:50%;transform:translateY(-50%);color:#adb5bd;font-size:.78rem"></i>
+        <input class="cm-search" id="cm-search" type="text" placeholder="Search username…" autocomplete="off">
+      </div>
+
+      {# Sort #}
+      <select class="form-control form-control-sm" id="cm-sort" style="width:140px;font-size:.74rem;height:28px;padding:2px 6px">
+        <option value="risk_desc">Risk Score ↓</option>
+        <option value="risk_asc">Risk Score ↑</option>
+        <option value="rank_asc">CTF Rank ↑</option>
+        <option value="score_desc">Score ↓</option>
+        <option value="solves_desc">Solves ↓</option>
+        <option value="detectors_desc">Most Detectors</option>
+        <option value="genuine_desc">Genuine Score ↓</option>
+      </select>
+
+      {# Detector filter dropdown #}
+      {% if ns.all_dets %}
+      <div class="dropdown">
+        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+                id="det-filter-btn" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"
+                style="font-size:.78rem">
+          Filter Detectors
+        </button>
+        <div class="dropdown-menu p-2" id="det-filter-menu" style="min-width:210px;font-size:.78rem"
+             onclick="event.stopPropagation()">
+          <label class="dropdown-item p-1" style="cursor:pointer">
+            <input type="checkbox" class="det-cb" value="__all__" checked> All detectors
+          </label>
+          <div class="dropdown-divider my-1"></div>
+          {% for det in ns.all_dets|sort %}
+          <label class="dropdown-item p-1" style="cursor:pointer">
+            <input type="checkbox" class="det-cb" value="{{ det }}" checked>
+            {{ det|replace('_',' ')|title }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="cm-toolbar-sep"></div>
+
+      {# View toggle #}
+      <button class="cm-view-btn active" id="btn-tv" onclick="cmSetView('table')">≡ Table</button>
+      <button class="cm-view-btn" id="btn-cv" onclick="cmSetView('card')">⊞ Cards</button>
+
+      <span class="cm-vcnt" id="cm-vcnt">{{ suspects|length }} suspects</span>
+
+      <div class="cm-toolbar-sep"></div>
+
+      {# Bulk actions #}
+      <div class="cm-bulk-bar" id="cm-bulk-bar">
+        <span id="cm-bulk-count">0 selected</span>
+        <button class="btn btn-xs btn-outline-danger"   onclick="cmBulkBan()">🚫 Ban All</button>
+        <button class="btn btn-xs btn-outline-warning"  onclick="cmBulkFlag()">🚩 Flag All</button>
+        <button class="btn btn-xs btn-outline-secondary" onclick="cmClearSel()">✕ Clear</button>
+      </div>
+    </div>
+
+    {# TABLE VIEW #}
+    <div id="view-table">
+      <div class="cm-table-wrap">
+        <table class="table table-sm cm-table" id="tbl-suspects">
+          <thead>
+            <tr>
+              <th style="width:2%"><input type="checkbox" id="chk-all"></th>
+              <th style="width:2%"></th>
+              <th class="cm-th-sort" data-col="2" style="width:3%"># <span class="cm-sort-icon"></span></th>
+              <th style="width:3.5%">Risk</th>
+              <th style="width:10%">User</th>
+              <th class="cm-th-sort" data-col="5" style="width:4.5%">Rank <span class="cm-sort-icon"></span></th>
+              <th class="cm-th-sort" data-col="6" style="width:5%">Score <span class="cm-sort-icon"></span></th>
+              <th class="cm-th-sort" data-col="7" style="width:4%">Solves <span class="cm-sort-icon"></span></th>
+              <th style="width:16%">Challenges</th>
+              <th class="cm-th-sort" data-col="9" style="width:6%">Genuine <span class="cm-sort-icon"></span></th>
+              <th style="width:38%">Detectors</th>
+              <th style="width:6%">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for s in suspects %}
+            {% set sus_pct = [s.score, 100]|min %}
+            {% set gen_pct = [s.genuine_score, 100]|min %}
+            {% if sus_pct >= 70 %}{% set rc="cm-row-high" %}{% set tier="high" %}{% set rc_hex="#dc3545" %}
+            {% elif sus_pct >= 35 %}{% set rc="cm-row-mid" %}{% set tier="mid" %}{% set rc_hex="#fd7e14" %}
+            {% else %}{% set rc="cm-row-low" %}{% set tier="low" %}{% set rc_hex="#ffc107" %}{% endif %}
+
+            <tr class="{{ rc }} cm-suspect-row"
+                data-uid="{{ s.user_id }}"
+                data-risk="{{ sus_pct }}"
+                data-rank="{{ s.ctf_rank if s.ctf_rank != '—' else 9999 }}"
+                data-score="{{ s.ctf_score }}"
+                data-solves="{{ s.solve_count }}"
+                data-genuine="{{ s.genuine_score|int }}"
+                data-detcount="{{ s.get('detectors',{})|length }}"
+                data-name="{{ s.name|lower }}"
+                data-dets="{{ s.get('detectors',{}).keys()|list|join(',') }}"
+                onclick="cmToggleDetail(event,this)">
+              <td onclick="event.stopPropagation()" data-sort="{{ loop.index }}">
+                <input type="checkbox" class="cm-row-chk" value="{{ s.user_id }}">
+              </td>
+              <td data-sort="{{ loop.index }}">
+                <span class="cm-expand-btn">▶</span>
+              </td>
+              <td class="text-center text-muted" data-sort="{{ loop.index }}" style="font-size:.72rem;font-weight:600">{{ loop.index }}</td>
+              <td>
+                <div class="cm-risk-ring" style="--pct:{{ sus_pct }};--rc:{{ rc_hex }}">
+                  <span class="cm-risk-num">{{ sus_pct }}</span>
+                </div>
+              </td>
+              <td>
+                <a href="/admin/users/{{ s.user_id }}" target="_blank"
+                   onclick="event.stopPropagation()" style="font-weight:700;color:#0069d9">{{ s.name }}</a>
+                {% if s.first_bloods > 0 %}
+                  <div style="font-size:.66rem;color:#856404;margin-top:1px">🥇 ×{{ s.first_bloods }} first blood</div>
+                {% endif %}
+              </td>
+              <td data-sort="{{ s.ctf_rank if s.ctf_rank != '—' else 9999 }}">
+                {% if s.ctf_rank != '—' %}<span class="cm-rank-badge">#{{ s.ctf_rank }}</span>
+                {% else %}<span class="text-muted">—</span>{% endif %}
+              </td>
+              <td data-sort="{{ s.ctf_score }}" class="font-weight-bold">{{ s.ctf_score }}</td>
+              <td data-sort="{{ s.solve_count }}" class="text-center">{{ s.solve_count }}</td>
+              <td>
+                {% for cat, cnt in s.categories.items()|sort(attribute='0') %}
+                  <span class="cm-cat-badge">{{ cat }} ×{{ cnt }}</span>
+                {% endfor %}
+              </td>
+              <td data-sort="{{ s.genuine_score|int }}">
+                <div class="cm-bar mb-1" style="width:58px"><div class="cm-bar-fill cm-bar-genuine" style="width:{{ gen_pct }}%"></div></div>
+                <small class="text-muted" style="font-size:.65rem">{{ "%.0f"|format(s.genuine_score) }}</small>
+              </td>
+              <td class="td-dets">
+                <div class="cm-bar mb-1" style="width:58px"><div class="cm-bar-fill cm-bar-suspicion" style="width:{{ sus_pct }}%"></div></div>
+                <div class="cm-dets-wrap">
+                {% for det, det_info in s.get('detectors',{}).items() %}
+                  {% set sev = det_info.severity if det_info is mapping else det_info %}
+                  {% if sev >= 70 %}{% set dc="sev-high" %}{% set ic="💀" %}
+                  {% elif sev >= 35 %}{% set dc="sev-mid" %}{% set ic="⚠" %}
+                  {% else %}{% set dc="sev-low" %}{% set ic="ℹ" %}{% endif %}
+                  <span class="cm-det-badge {{ dc }}"
+                        onclick="event.stopPropagation();cmShowModal('{{ det }}',{{ s.user_id }})"
+                        title="Severity {{ sev }} — click to see events">{{ ic }} {{ det|replace('_',' ') }}</span>
+                {% endfor %}
+                </div>
+              </td>
+              <td onclick="event.stopPropagation()">
+                <div class="cm-actions">
+                  <button class="cm-btn ban"  onclick="cmBanUser({{ s.user_id }},'{{ s.name|replace("'","") }}')">🚫 Ban</button>
+                  <button class="cm-btn flag" onclick="cmFlagRow(this,{{ s.user_id }})">🚩</button>
+                  <a href="/admin/users/{{ s.user_id }}" target="_blank" class="cm-btn profile">👤</a>
+                </div>
+              </td>
+            </tr>
+
+            {# Expanded detail #}
+            <tr class="cm-detail-row" id="detail-{{ s.user_id }}">
+              <td colspan="12" style="padding:0">
+                <div class="cm-detail-panel">
+                  <div>
+                    <h6>📋 Analysis</h6>
+                    <pre class="cm-pre">{{ s.narrative }}</pre>
+                  </div>
+                  <div>
+                    <h6>🔍 Detector Hits</h6>
+                    {% for det, det_info in s.get('detectors',{}).items() %}
+                      {% set sev = det_info.severity if det_info is mapping else det_info %}
+                      {% set cnt = det_info.events if det_info is mapping else 1 %}
+                      {% if sev >= 70 %}{% set dc="sev-high" %}{% set ic="💀" %}
+                      {% elif sev >= 35 %}{% set dc="sev-mid" %}{% set ic="⚠" %}
+                      {% else %}{% set dc="sev-low" %}{% set ic="ℹ" %}{% endif %}
+                      <div class="d-flex align-items-center mb-1" style="gap:6px">
+                        <span class="cm-det-badge {{ dc }}" style="cursor:default">{{ ic }} {{ det|replace('_',' ') }}</span>
+                        <small class="text-muted">sev {{ sev }} · {{ cnt }} event{% if cnt != 1 %}s{% endif %}</small>
+                      </div>
+                    {% endfor %}
+                  </div>
+                  <div>
+                    <h6>📍 IP Locations</h6>
+                    {% for loc in s.locations %}
+                      <div style="font-size:.73rem;color:#6c757d;padding:2px 0">📍 {{ loc }}</div>
+                    {% else %}
+                      <small class="text-muted">No location data</small>
+                    {% endfor %}
+                  </div>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# CARD VIEW #}
+    <div id="view-card" class="cm-cards" style="display:none">
+      {% for s in suspects %}
+        {% set sus_pct = [s.score, 100]|min %}
+        {% if sus_pct >= 70 %}{% set tier="high" %}{% set rc_hex="#dc3545" %}
+        {% elif sus_pct >= 35 %}{% set tier="mid" %}{% set rc_hex="#fd7e14" %}
+        {% else %}{% set tier="low" %}{% set rc_hex="#ffc107" %}{% endif %}
+        <div class="cm-card {{ tier }}"
+             data-name="{{ s.name|lower }}" data-risk="{{ sus_pct }}"
+             data-rank="{{ s.ctf_rank if s.ctf_rank != '—' else 9999 }}"
+             data-score="{{ s.ctf_score }}" data-solves="{{ s.solve_count }}"
+             data-genuine="{{ s.genuine_score|int }}" data-detcount="{{ s.get('detectors',{})|length }}"
+             data-dets="{{ s.get('detectors',{}).keys()|list|join(',') }}">
+          <div class="cm-card-hd">
+            <div class="cm-risk-ring" style="--pct:{{ sus_pct }};--rc:{{ rc_hex }}">
+              <span class="cm-risk-num">{{ sus_pct }}</span>
+            </div>
+            <div>
+              <div class="cm-card-name">{{ s.name }}</div>
+              <div class="cm-card-sub">
+                {% if s.ctf_rank != '—' %}#{{ s.ctf_rank }} · {% endif %}{{ s.ctf_score }} pts · {{ s.solve_count }} solves{% if s.first_bloods > 0 %} · 🥇×{{ s.first_bloods }}{% endif %}
+              </div>
+            </div>
+          </div>
+          <div class="cm-card-body">
+            <div class="cm-card-meta">
+              <div class="cm-card-kv"><span class="k">Genuine</span><span class="v">{{ "%.0f"|format(s.genuine_score) }}/100</span></div>
+              <div class="cm-card-kv"><span class="k">Detectors</span><span class="v">{{ s.get('detectors',{})|length }}</span></div>
+              <div class="cm-card-kv"><span class="k">Locations</span><span class="v">{{ s.locations|length }}</span></div>
+            </div>
+            <div class="cm-bar mb-2"><div class="cm-bar-fill cm-bar-suspicion" style="width:{{ sus_pct }}%"></div></div>
+            <div class="mb-2">
+              {% for det, det_info in s.get('detectors',{}).items() %}
+                {% set sev = det_info.severity if det_info is mapping else det_info %}
+                {% if sev >= 70 %}{% set dc="sev-high" %}{% set ic="💀" %}
+                {% elif sev >= 35 %}{% set dc="sev-mid" %}{% set ic="⚠" %}
+                {% else %}{% set dc="sev-low" %}{% set ic="ℹ" %}{% endif %}
+                <span class="cm-det-badge {{ dc }}" onclick="cmShowModal('{{ det }}',{{ s.user_id }})" title="sev {{ sev }}">{{ ic }} {{ det|replace('_',' ') }}</span>
+              {% endfor %}
+            </div>
+            <div class="mb-2">
+              {% for cat, cnt in s.categories.items()|sort(attribute='0') %}
+                <span class="cm-cat-badge">{{ cat }} ×{{ cnt }}</span>
+              {% endfor %}
+            </div>
+            <div class="cm-card-footer">
+              <button class="cm-btn ban"  onclick="cmBanUser({{ s.user_id }},'{{ s.name|replace("'","") }}')">🚫 Ban</button>
+              <button class="cm-btn flag" onclick="cmFlagRow(this,{{ s.user_id }})">🚩 Flag</button>
+              <a href="/admin/users/{{ s.user_id }}" target="_blank" class="cm-btn profile">👤 Profile</a>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% else %}
+      <div class="cm-empty"><span class="em-icon">🔍</span>No suspects found. Click <strong>Run All</strong> to start analysis.</div>
+    {% endif %}
+  </div>
+
+  {# ════ TAB: Detectors ════ #}
+  <div class="tab-pane fade" id="tab-detectors">
+    {% set ns3 = namespace(dh=0,dm=0,dl=0) %}
+    {% for ds in detector_status %}
+      {% for e in detector_events.get(ds.name,[]) %}
+        {% if e.severity >= 70 %}{% set ns3.dh = ns3.dh+1 %}
+        {% elif e.severity >= 35 %}{% set ns3.dm = ns3.dm+1 %}
+        {% else %}{% set ns3.dl = ns3.dl+1 %}{% endif %}
+      {% endfor %}
+    {% endfor %}
+    <div class="d-flex align-items-center mb-3" style="gap:6px;font-size:.78rem;color:#6c757d">
+      All events:
+      <span class="badge badge-danger">💀 {{ ns3.dh }} High</span>
+      <span class="badge badge-warning">⚠ {{ ns3.dm }} Med</span>
+      <span class="badge badge-secondary">{{ ns3.dl }} Low</span>
+    </div>
+
+    <div class="cm-acc-list">
+    {% for ds in detector_status %}
+      {% set events = detector_events.get(ds.name,[]) %}
+      {% set high_ev = events|selectattr('severity','ge',70)|list|length %}
+      {% set mid_ev  = events|selectattr('severity','ge',35)|selectattr('severity','lt',70)|list|length %}
+      <div class="cm-acc-item">
+        <button class="cm-acc-header" onclick="cmToggle(this)" data-target="acc-{{ ds.name }}">
+          <span class="cm-acc-toggle">▶</span>
+          <strong style="text-align:left">{{ ds.name|replace('_',' ')|title }}</strong>
+          {% if ds.enabled %}<span class="badge badge-success">on</span>
+          {% else %}<span class="badge badge-secondary">off</span>{% endif %}
+          <span class="badge badge-primary">{{ ds.filtered_count }} event{% if ds.filtered_count != 1 %}s{% endif %}</span>
+          {% if high_ev %}<span class="badge badge-danger">💀 {{ high_ev }}H</span>{% endif %}
+          {% if mid_ev  %}<span class="badge badge-warning">⚠ {{ mid_ev }}M</span>{% endif %}
+          {% if ds.last_run %}<small class="text-muted ml-2">{{ ds.last_run }}</small>{% endif %}
+          {% if ds.duration_ms %}<small class="text-muted">{{ ds.duration_ms }}ms</small>{% endif %}
+          <span class="ml-auto d-flex" style="gap:5px" onclick="event.stopPropagation()">
+            <button class="btn btn-xs btn-outline-success" onclick="cmRunOne('{{ ds.name }}')">▶ Run</button>
+            <a href="{{ url_for('anti_cheat.config_page') }}#{{ ds.name.split('_')[0] }}" class="btn btn-xs btn-outline-secondary">⚙</a>
+          </span>
+        </button>
+        <div class="cm-acc-body" id="acc-{{ ds.name }}">
+          {% if events %}
+          <div class="cm-table-wrap" style="border:0;border-radius:0;border-top:1px solid #dee2e6">
+            <table class="table table-sm cm-table mb-0">
+              <thead>
+                <tr>
+                  <th class="cm-th-sort" data-col="0" style="width:3%"># <span class="cm-sort-icon"></span></th>
+                  <th style="width:10%">User</th>
+                  <th class="cm-th-sort" data-col="2" style="width:5%">Rank <span class="cm-sort-icon"></span></th>
+                  <th class="cm-th-sort" data-col="3" style="width:5%">Score <span class="cm-sort-icon"></span></th>
+                  <th class="cm-th-sort" data-col="4" style="width:4%">Solves <span class="cm-sort-icon"></span></th>
+                  <th style="width:14%">Challenges</th>
+                  <th class="cm-th-sort" data-col="6" style="width:7%">Genuine <span class="cm-sort-icon"></span></th>
+                  <th class="cm-th-sort" data-col="7" style="width:6%">Severity <span class="cm-sort-icon"></span></th>
+                  <th style="width:30%">Detail</th>
+                  <th style="width:10%">Locations</th>
+                  <th style="width:6%">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for e in events %}
+                {% if e.severity >= 70 %}{% set rc="cm-row-high" %}{% set sc="sev-high" %}{% set ic="💀" %}
+                {% elif e.severity >= 35 %}{% set rc="cm-row-mid" %}{% set sc="sev-mid" %}{% set ic="⚠" %}
+                {% else %}{% set rc="cm-row-low" %}{% set sc="sev-low" %}{% set ic="ℹ" %}{% endif %}
+                <tr class="{{ rc }}">
+                  <td data-sort="{{ loop.index }}" class="text-center text-muted" style="font-size:.72rem">{{ loop.index }}</td>
+                  <td>
+                    <a href="/admin/users/{{ e.user_id }}" target="_blank" style="font-weight:700;color:#0069d9">{{ e.user_name }}</a>
+                    {% if e.first_bloods > 0 %}<div style="font-size:.65rem;color:#856404">🥇×{{ e.first_bloods }}</div>{% endif %}
+                    {% if e.related_name %}<div style="font-size:.65rem;color:#6c757d">↔ {{ e.related_name }}</div>{% endif %}
+                  </td>
+                  <td data-sort="{{ e.ctf_rank if e.ctf_rank != '—' else 9999 }}">
+                    {% if e.ctf_rank != '—' %}<span class="cm-rank-badge">#{{ e.ctf_rank }}</span>{% else %}—{% endif %}
+                  </td>
+                  <td data-sort="{{ e.ctf_score }}" class="font-weight-bold">{{ e.ctf_score }}</td>
+                  <td data-sort="{{ e.solve_count }}" class="text-center">{{ e.solve_count }}</td>
+                  <td>
+                    {% for cat, cnt in e.categories.items()|sort(attribute='0') %}
+                      <span class="cm-cat-badge">{{ cat }} ×{{ cnt }}</span>
+                    {% endfor %}
+                  </td>
+                  <td data-sort="{{ e.genuine_score }}">
+                    <div class="cm-bar mb-1" style="width:58px"><div class="cm-bar-fill cm-bar-genuine" style="width:{{ [e.genuine_score,100]|min }}%"></div></div>
+                    <small class="text-muted">{{ e.genuine_score }}</small>
+                  </td>
+                  <td data-sort="{{ e.severity }}">
+                    <span class="cm-det-badge {{ sc }}" style="cursor:default">{{ ic }} {{ e.severity }}</span>
+                  </td>
+                  <td>
+                    <pre class="cm-pre" style="max-width:100%">{{ e.detail }}{% if e.challenge_name %}
+Challenge: {{ e.challenge_name }}{% endif %}{% if e.occurred_at %}
+When: {{ e.occurred_at }}{% endif %}</pre>
+                  </td>
+                  <td>
+                    {% for loc in e.locations[:3] %}
+                      <div class="text-muted-sm">📍 {{ loc }}</div>
+                    {% endfor %}
+                  </td>
+                  <td>
+                    <div class="cm-actions">
+                      <button class="cm-btn ban" onclick="cmBanUser({{ e.user_id }},'{{ e.user_name|replace("'","") }}')">🚫</button>
+                      <a href="/admin/users/{{ e.user_id }}" target="_blank" class="cm-btn profile">👤</a>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+            <div class="px-3 py-2 text-muted" style="font-size:.8rem">
+              {% if ds.enabled %}No events — run this detector.{% else %}Detector disabled.{% endif %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  </div>
+
+  {# ════ TAB: Genuine ════ #}
+  <div class="tab-pane fade" id="tab-genuine">
+    <p class="text-muted mb-3" style="font-size:.8rem">
+      Players with genuine score ≥ threshold (default 50/100).
+      Tune via <a href="{{ url_for('anti_cheat.config_page') }}#filter">Settings → filter.genuine_min_score</a>.
+    </p>
+    {% if genuine_users %}
+    <div class="cm-table-wrap">
+      <table class="table table-sm cm-table" id="tbl-genuine">
+        <thead>
+          <tr>
+            <th style="width:3%" class="cm-th-sort" data-col="0"># <span class="cm-sort-icon"></span></th>
+            <th style="width:11%">User</th>
+            <th class="cm-th-sort" data-col="2" style="width:5%">Rank <span class="cm-sort-icon"></span></th>
+            <th class="cm-th-sort" data-col="3" style="width:5%">Score <span class="cm-sort-icon"></span></th>
+            <th class="cm-th-sort" data-col="4" style="width:4%">Solves <span class="cm-sort-icon"></span></th>
+            <th style="width:14%">Challenges</th>
+            <th class="cm-th-sort" data-col="6" style="width:8%">Genuine <span class="cm-sort-icon"></span></th>
+            <th style="width:14%">Signals</th>
+            <th style="width:22%">Evidence</th>
+            <th style="width:9%">Locations</th>
+            <th style="width:5%">Profile</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for u in genuine_users %}
+          {% set gen_pct = [u.genuine_score, 100]|min %}
+          <tr class="cm-row-genuine">
+            <td data-sort="{{ loop.index }}" class="text-center">
+              {% if loop.index == 1 %}<span class="cm-medal-gold">🥇</span>
+              {% elif loop.index == 2 %}<span class="cm-medal-silver">🥈</span>
+              {% elif loop.index == 3 %}<span class="cm-medal-bronze">🥉</span>
+              {% else %}<small class="text-muted">{{ loop.index }}</small>{% endif %}
+            </td>
+            <td>
+              <a href="/admin/users/{{ u.user_id }}" target="_blank" style="font-weight:700;color:#155724">{{ u.name }}</a>
+              <span class="cm-genuine-badge ml-1">✓ genuine</span>
+              {% if u.first_bloods > 0 %}
+                <div style="font-size:.66rem;color:#28a745;margin-top:1px">🥇 ×{{ u.first_bloods }} first blood{% if u.first_bloods > 1 %}s{% endif %}</div>
+              {% endif %}
+            </td>
+            <td data-sort="{{ u.ctf_rank if u.ctf_rank != '—' else 9999 }}">
+              <span class="cm-rank-badge">#{{ u.ctf_rank }}</span>
+            </td>
+            <td data-sort="{{ u.ctf_score }}" class="font-weight-bold">{{ u.ctf_score }}</td>
+            <td data-sort="{{ u.solve_count }}" class="text-center">{{ u.solve_count }}</td>
+            <td>
+              {% for cat, cnt in u.categories.items()|sort(attribute='0') %}
+                <span class="cm-cat-badge">{{ cat }} ×{{ cnt }}</span>
+              {% endfor %}
+            </td>
+            <td data-sort="{{ u.genuine_score|int }}">
+              <div class="cm-bar mb-1" style="width:58px"><div class="cm-bar-fill cm-bar-genuine" style="width:{{ gen_pct }}%"></div></div>
+              <small class="text-muted" style="font-size:.65rem">{{ "%.0f"|format(u.genuine_score) }}</small>
+            </td>
+            <td>
+              {% set gm = u.genuine_meta %}
+              {% if gm.get('first_blood_count',0)>0 %}<span class="badge badge-success">🥇 ×{{ gm.first_blood_count }}</span>{% endif %}
+              {% if gm.get('rare_first_blood_count',0)>0 %}<span class="badge badge-warning">rare FB ×{{ gm.rare_first_blood_count }}</span>{% endif %}
+              {% set ar = gm.get('avg_solve_rank_pct',100) %}
+              {% if ar <= 30 %}<span class="badge badge-info">early {{ ar }}%</span>{% endif %}
+              {% if gm.get('fail_ratio',0)>=0.3 %}<span class="badge badge-secondary">struggles {{ (gm.fail_ratio*100)|int }}%</span>{% endif %}
+              {% if gm.get('category_count',0)>=3 %}<span class="badge badge-light">{{ gm.category_count }} cats</span>{% endif %}
+              {% if gm.get('single_ip') %}<span class="badge badge-light">single IP</span>{% endif %}
+              {% if gm.get('span_hours',0)>=3 %}<span class="badge badge-light">{{ gm.span_hours }}h span</span>{% endif %}
+              {% if gm.get('progressive_difficulty') %}<span class="badge badge-info">easy→hard</span>{% endif %}
+              {% if gm.get('hard_struggle_count',0)>=1 %}<span class="badge badge-secondary">hard ×{{ gm.hard_struggle_count }}</span>{% endif %}
+            </td>
+            <td><pre class="cm-pre" style="max-width:100%">{{ u.narrative }}</pre></td>
+            <td>
+              {% for loc in u.locations[:4] %}
+                <div class="text-muted-sm">📍 {{ loc }}</div>
+              {% endfor %}
+              {% if u.locations|length > 4 %}<div class="text-muted-sm">+{{ u.locations|length-4 }} more</div>{% endif %}
+            </td>
+            <td>
+              <a href="/admin/users/{{ u.user_id }}" target="_blank" class="btn btn-xs btn-outline-success">👤 View</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="cm-empty"><span class="em-icon">✅</span>No clean users identified yet. Run all detectors first.</div>
+    {% endif %}
+  </div>
+
+</div>{# /tab-content #}
+</div>{# /.cm-root #}
+
+{# ════ MODAL ════ #}
+<div class="cm-overlay" id="cm-overlay" onclick="cmCloseModal()">
+  <div class="cm-modal" onclick="event.stopPropagation()">
+    <div class="cm-modal-hd">
+      <span class="cm-modal-title" id="cm-modal-title">Events</span>
+      <button class="cm-modal-close" onclick="cmCloseModal()">✕ Close</button>
+    </div>
+    <div id="cm-modal-body"></div>
+  </div>
+</div>
+
+{# ════ JS ════ #}
+<script>
+var CM_DET_EVENTS = {{ detector_events_json|safe }};
+var CM_USER_NAMES = {{ user_names_json|safe }};
+var CM_RUN = "{{ url_for('anti_cheat.run_now') }}";
+var CM_RST = "{{ url_for('anti_cheat.reset') }}";
+
+/* HTML-escape any string before inserting into innerHTML — defense-in-depth against XSS */
+function cmEsc(s){
+  if(s==null) return '';
+  var d=document.createElement('div');
+  d.appendChild(document.createTextNode(String(s)));
+  return d.innerHTML;
+}
+
+/* post helper */
+function cmPost(url, body) {
+  return fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','CSRF-Token':init.csrfNonce,'Accept':'application/json'},
+    body: JSON.stringify(body||{})
+  }).then(function(r){ if(!r.ok){alert('Error: '+r.status);return null;} return r.json().catch(function(){return{};});});
+}
+
+/* run all / reset */
+document.getElementById('btn-run-all').addEventListener('click',function(){
+  this.disabled=true; this.textContent='⏳ Running…';
+  cmPost(CM_RUN,{}).then(function(){location.reload();});
+});
+document.getElementById('btn-reset').addEventListener('click',function(){
+  if(!confirm('Delete ALL events?')) return;
+  cmPost(CM_RST,{}).then(function(){location.reload();});
+});
+function cmRunOne(n){cmPost(CM_RUN,{detector:n}).then(function(){location.reload();});}
+
+/* accordion */
+function cmToggle(h){
+  h.classList.toggle('active');
+  var b=document.getElementById(h.getAttribute('data-target'));
+  if(b) b.classList.toggle('open');
+}
+
+/* row expand */
+function cmToggleDetail(e,row){
+  if(['INPUT','A','BUTTON','SELECT'].indexOf(e.target.tagName)!==-1) return;
+  var uid=row.dataset.uid;
+  var det=document.getElementById('detail-'+uid);
+  row.classList.toggle('expanded');
+  if(det) det.classList.toggle('open');
+}
+
+/* view toggle */
+function cmSetView(v){
+  document.getElementById('view-table').style.display=v==='table'?'block':'none';
+  document.getElementById('view-card').style.display=v==='card'?'flex':'none';
+  document.getElementById('btn-tv').classList.toggle('active',v==='table');
+  document.getElementById('btn-cv').classList.toggle('active',v==='card');
+}
+
+/* column sort */
+function cmSortTable(th){
+  var table=th.closest('table');
+  var tbody=table.querySelector('tbody');
+  var col=parseInt(th.dataset.col,10);
+  var asc=th.classList.contains('sort-desc');
+  table.querySelectorAll('.cm-th-sort').forEach(function(h){h.classList.remove('sort-asc','sort-desc');});
+  th.classList.add(asc?'sort-asc':'sort-desc');
+  var rows=Array.from(tbody.querySelectorAll('tr:not(.cm-detail-row):not(.cm-tier-tr)'));
+  rows.sort(function(a,b){
+    var ca=a.querySelectorAll('td')[col], cb=b.querySelectorAll('td')[col];
+    if(!ca||!cb) return 0;
+    var va=parseFloat(ca.dataset.sort!==undefined?ca.dataset.sort:ca.textContent)||0;
+    var vb=parseFloat(cb.dataset.sort!==undefined?cb.dataset.sort:cb.textContent)||0;
+    return asc?va-vb:vb-va;
+  });
+  rows.forEach(function(r){
+    tbody.appendChild(r);
+    var d=document.getElementById('detail-'+r.dataset.uid);
+    if(d) tbody.appendChild(d);
+  });
+}
+document.querySelectorAll('.cm-th-sort').forEach(function(th){
+  th.addEventListener('click',function(){cmSortTable(th);});
+});
+
+/* sidebar sort */
+document.getElementById('cm-sort').addEventListener('change',function(){
+  var val=this.value;
+  var fns={
+    risk_desc:   function(r){return -parseFloat(r.dataset.risk||0);},
+    risk_asc:    function(r){return  parseFloat(r.dataset.risk||0);},
+    rank_asc:    function(r){return  parseFloat(r.dataset.rank||9999);},
+    score_desc:  function(r){return -parseFloat(r.dataset.score||0);},
+    solves_desc: function(r){return -parseFloat(r.dataset.solves||0);},
+    detectors_desc:function(r){return-parseFloat(r.dataset.detcount||0);},
+    genuine_desc:function(r){return -parseFloat(r.dataset.genuine||0);}
+  };
+  var fn=fns[val]||function(){return 0;};
+  var tbody=document.querySelector('#tbl-suspects tbody');
+  var rows=Array.from(tbody.querySelectorAll('tr.cm-suspect-row'));
+  rows.sort(function(a,b){return fn(a)-fn(b);});
+  rows.forEach(function(r){tbody.appendChild(r);var d=document.getElementById('detail-'+r.dataset.uid);if(d)tbody.appendChild(d);});
+  var cw=document.getElementById('view-card');
+  Array.from(cw.querySelectorAll('.cm-card')).sort(function(a,b){return fn(a)-fn(b);}).forEach(function(c){cw.appendChild(c);});
+});
+
+/* search + filter */
+document.getElementById('cm-search').addEventListener('input',applyFilters);
+document.querySelectorAll('.det-cb').forEach(function(cb){
+  cb.addEventListener('change',function(){
+    if(this.value==='__all__'){document.querySelectorAll('.det-cb').forEach(function(c){c.checked=cb.checked;});}
+    applyFilters();
+  });
+});
+function applyFilters(){
+  var q=(document.getElementById('cm-search').value||'').toLowerCase().trim();
+  var active=Array.from(document.querySelectorAll('.det-cb:checked')).map(function(c){return c.value;});
+  var allOn=active.indexOf('__all__')!==-1;
+  var detSet=new Set(active.filter(function(d){return d!=='__all__';}));
+  var vis=0;
+  document.querySelectorAll('#tbl-suspects tbody tr.cm-suspect-row').forEach(function(row){
+    var nm=!q||row.dataset.name.indexOf(q)!==-1;
+    var dets=row.dataset.dets?row.dataset.dets.split(','):[];
+    var dm=allOn||dets.some(function(d){return detSet.has(d);});
+    var show=nm&&dm;
+    row.style.display=show?'':'none';
+    var det=document.getElementById('detail-'+row.dataset.uid);
+    if(det) det.style.display='none';
+    if(show) vis++;
+  });
+  document.querySelectorAll('#view-card .cm-card').forEach(function(c){
+    var nm=!q||c.dataset.name.indexOf(q)!==-1;
+    var dets=c.dataset.dets?c.dataset.dets.split(','):[];
+    var dm=allOn||dets.some(function(d){return detSet.has(d);});
+    c.style.display=(nm&&dm)?'':'none';
+  });
+  var el=document.getElementById('cm-vcnt');
+  if(el) el.textContent=vis+' suspects';
+}
+
+/* bulk select */
+var selUids=new Set();
+document.getElementById('chk-all').addEventListener('change',function(){
+  document.querySelectorAll('.cm-row-chk').forEach(function(cb){
+    cb.checked=document.getElementById('chk-all').checked;
+    var uid=parseInt(cb.value);
+    if(cb.checked) selUids.add(uid); else selUids.delete(uid);
+  });
+  updateBulk();
+});
+document.querySelectorAll('.cm-row-chk').forEach(function(cb){
+  cb.addEventListener('change',function(){
+    var uid=parseInt(this.value);
+    if(this.checked) selUids.add(uid); else selUids.delete(uid);
+    updateBulk();
+  });
+});
+function updateBulk(){
+  var bar=document.getElementById('cm-bulk-bar');
+  var cnt=document.getElementById('cm-bulk-count');
+  if(selUids.size>0){bar.classList.add('visible');if(cnt)cnt.textContent=selUids.size+' selected';}
+  else{bar.classList.remove('visible');}
+}
+function cmClearSel(){selUids.clear();document.querySelectorAll('.cm-row-chk').forEach(function(c){c.checked=false;});document.getElementById('chk-all').checked=false;updateBulk();}
+
+function cmBanUser(uid,name){
+  if(!confirm('Ban "'+name+'"?')) return;
+  fetch('/api/v1/users/'+uid,{method:'PATCH',headers:{'Content-Type':'application/json','CSRF-Token':init.csrfNonce},body:JSON.stringify({banned:true})})
+  .then(function(r){
+    if(r.ok){alert(name+' banned.');var row=document.querySelector('[data-uid="'+uid+'"]');if(row){row.style.opacity='.35';row.style.pointerEvents='none';}}
+    else{alert('Ban failed: '+r.status);}
+  });
+}
+function cmFlagRow(btn,uid){
+  var row=document.querySelector('[data-uid="'+uid+'"]');
+  if(row) row.style.outline='2px solid #ffc107';
+  btn.textContent='✓'; btn.disabled=true;
+}
+function cmBulkBan(){if(!selUids.size)return;if(!confirm('Ban '+selUids.size+' users?'))return;selUids.forEach(function(u){cmBanUser(u,'user#'+u);});cmClearSel();}
+function cmBulkFlag(){selUids.forEach(function(u){var r=document.querySelector('[data-uid="'+u+'"]');if(r)r.style.outline='2px solid #ffc107';});cmClearSel();}
+
+/* modal */
+function cmShowModal(det,uid){
+  var title=document.getElementById('cm-modal-title');
+  var body=document.getElementById('cm-modal-body');
+  title.textContent=det.replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();})+' — Events';
+  var evts=(CM_DET_EVENTS[det]||[]).filter(function(e){return uid===0||e.user_id===uid;});
+  if(!evts.length){
+    body.innerHTML='<p class="text-muted" style="font-size:.82rem;padding:.4rem 0">No events recorded.</p>';
+  } else {
+    body.innerHTML=evts.map(function(e){
+      var sc=e.severity>=70?'sev-high':e.severity>=35?'sev-mid':'sev-low';
+      var ic=e.severity>=70?'💀':e.severity>=35?'⚠':'ℹ';
+      return '<div class="cm-modal-event">'+
+        '<div class="d-flex justify-content-between align-items-center mb-1">'+
+        '<span class="ev-user">'+cmEsc(CM_USER_NAMES[e.user_id]||'User#'+e.user_id)+'</span>'+
+        '<span class="cm-det-badge '+sc+'" style="cursor:default">'+ic+' '+e.severity+'</span>'+
+        '</div>'+
+        '<div class="ev-detail">'+cmEsc(e.detail||'')+'</div>'+
+        (e.occurred_at?'<div class="ev-time">🕐 '+cmEsc(e.occurred_at)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
+  document.getElementById('cm-overlay').classList.add('open');
+}
+function cmCloseModal(){document.getElementById('cm-overlay').classList.remove('open');}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')cmCloseModal();});
+
+/* tier dividers */
+(function(){
+  var tbody=document.querySelector('#tbl-suspects tbody');
+  if(!tbody) return;
+  var rows=Array.from(tbody.querySelectorAll('tr.cm-suspect-row'));
+  var done={};
+  var labels={high:'💀 HIGH Risk (score ≥ 70)',mid:'⚠ MEDIUM Risk (35–69)',low:'ℹ LOW Risk (< 35)'};
+  rows.forEach(function(row){
+    var risk=parseFloat(row.dataset.risk||0);
+    var tier=risk>=70?'high':risk>=35?'mid':'low';
+    if(!done[tier]){
+      done[tier]=true;
+      var tr=document.createElement('tr');
+      tr.className='cm-tier-tr';
+      tr.innerHTML='<td colspan="12" style="padding:0"><div class="cm-tier-divider '+tier+'">'+labels[tier]+'</div></td>';
+      tbody.insertBefore(tr,row);
+    }
+  });
+})();
+</script>
+{% endblock %}

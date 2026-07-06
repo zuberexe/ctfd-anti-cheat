@@ -1,0 +1,108 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ request.script_root }}/plugins/anti_cheat/assets/monitor.css">
+
+<div class="container mt-4">
+  <p>
+    <a href="{{ url_for('anti_cheat.dashboard') }}">← back to dashboard</a>
+  </p>
+  <h2>CTFd Anti-Cheat — Settings</h2>
+  <p class="text-muted">
+    All thresholds live in the <code>cm_config</code> table. Defaults are
+    seeded on first plugin load and are documented inline in
+    <code>utils.py</code> (search for <code>DEFAULTS</code>). Changes here are
+    persisted immediately; you do not need to restart CTFd. To re-evaluate the
+    corpus with new thresholds, hit "Run All Detectors" on the dashboard.
+  </p>
+
+  <form method="POST">
+    <input type="hidden" name="nonce" value="{{ Session.nonce }}">
+
+  <!-- Forward-looking UA capture -->
+  <div class="card mb-4">
+    <div class="card-body">
+      <h5>Forward-looking User-Agent capture</h5>
+      <p class="small text-muted">
+        CTFd's <code>Tracking</code> table stores IPs but not User-Agents.
+        Enable this to log <code>(user, ip, ua)</code> on every flag submission
+        going forward. UA-based detectors (IP+UA overlap, session-swap) will
+        upgrade from IP-only to IP+UA matching as soon as data accumulates.
+        <strong>Historical UAs cannot be recovered.</strong>
+      </p>
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="ua_capture"
+               name="enabled.ua_capture" {% if ua_capture %}checked{% endif %}>
+        <label class="form-check-label" for="ua_capture">
+          Enable User-Agent capture
+        </label>
+      </div>
+    </div>
+  </div>
+
+  {% set section_desc = {
+    'enabled': 'Master on/off toggles for each detector. Set to 0 to skip a detector entirely.',
+    'filter':  'Global filters applied when displaying results on the dashboard.',
+    'simul':   'Near-simultaneous solves — two users solving the same challenge within a time window.',
+    'mass_fb': 'Mass solves after first blood — user solves many challenges suspiciously quickly after first blood.',
+    'rare':    'First-try solves on rare/hard challenges (few total solvers, zero prior fails).',
+    'overlap': 'IP / User-Agent overlap — multiple accounts sharing a fingerprint.',
+    'corr':    'Solve-order correlation — two users solving challenges in nearly identical order.',
+    'velocity':'Velocity anomaly — solve rate (solves/min) far above cohort average.',
+    'wrong':   'Identical wrong-flag submissions — same wrong answer submitted by multiple users.',
+    'brute':   'Brute-force pattern — many failed attempts on one challenge in a short window.',
+    'dormant': 'Dormant account burst — long silence followed by rapid solve cluster.',
+    'swap':    'Session swap — same IP+UA fingerprint switching between accounts quickly.',
+    'first_solver': 'First solver on high-value challenge — flags users who are first to solve a high-point challenge with zero prior failed attempts (immediate correct answer = suspicious).',
+    'shared_ip': 'Shared correct-submission IP — multiple accounts submit a correct flag from the same IP.',
+    'ip_div':  'IP diversity — a single account submitting from an unusually large number of distinct IPs.',
+    'geo':     'Geographic anomaly — flag users whose IPs originate outside your configured region (country/state/city). Uses the bundled DB-IP city database.',
+    'score':   'Scoring model — cap and weight for the composite suspicion score.',
+  } %}
+  {% for section, keys in grouped %}
+  <div class="card mb-3" id="{{ section }}">
+    <div class="card-header d-flex align-items-center">
+      <strong class="mr-auto">{{ section }}</strong>
+      {% if section_desc[section] is defined %}
+        <small class="text-muted ml-2">{{ section_desc[section] }}</small>
+      {% endif %}
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-sm mb-0">
+        <thead class="thead-light">
+          <tr><th style="width: 45%">Key</th><th>Value</th></tr>
+        </thead>
+        <tbody>
+        {% for k, v in keys %}
+          <tr>
+            <td><code>{{ k }}</code></td>
+            <td>
+              {% if v == '1' or v == '0' %}
+                <select name="{{ k }}" class="form-control form-control-sm" style="width:auto">
+                  <option value="1" {% if v == '1' %}selected{% endif %}>1 — on</option>
+                  <option value="0" {% if v == '0' %}selected{% endif %}>0 — off</option>
+                </select>
+              {% else %}
+                <input type="text" name="{{ k }}" value="{{ v }}"
+                       class="form-control form-control-sm" style="width:160px">
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+
+  <button type="submit" class="btn btn-primary">Save Settings</button>
+  </form>
+
+  <h3 class="mt-5">Registered Detectors</h3>
+  <ul>
+  {% for d in detectors %}
+    <li><code>{{ d }}</code></li>
+  {% endfor %}
+  </ul>
+</div>
+{% endblock %}

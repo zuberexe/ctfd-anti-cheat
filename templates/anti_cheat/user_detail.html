@@ -1,0 +1,116 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ request.script_root }}/plugins/anti_cheat/assets/monitor.css">
+
+<div class="container mt-4">
+  <p>
+    <a href="{{ url_for('anti_cheat.dashboard') }}">← back to dashboard</a>
+  </p>
+
+  <h2>{{ user.name }} <small class="text-muted">#{{ user.id }}</small></h2>
+  <p class="text-muted">
+    {{ user.email }} · created {{ user.created }} · solves: {{ user.solves|length }}
+  </p>
+
+  <div class="row mt-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Suspicion Score</h5>
+          <div class="cm-bar cm-bar-lg">
+            <div class="cm-bar-fill cm-bar-suspicion" style="width: {{ score }}%"></div>
+            <span class="cm-bar-text cm-bar-text-lg">{{ score }} / 100</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Genuine-Player Score</h5>
+          <div class="cm-bar cm-bar-lg">
+            <div class="cm-bar-fill cm-bar-genuine" style="width: {{ genuine.score or 0 }}%"></div>
+            <span class="cm-bar-text cm-bar-text-lg">{{ genuine.score or 0 }} / 100</span>
+          </div>
+          {% if genuine %}
+          <ul class="list-unstyled small mt-3 mb-0">
+            <li>Failure ratio (fails-before-solve): <strong>{{ genuine.failure_ratio }}</strong></li>
+            <li>Active span: <strong>{{ genuine.span_h }} hours</strong></li>
+            <li>Categories solved: <strong>{{ genuine.categories }}</strong></li>
+            <li>Distinct IPs: <strong>{{ genuine.ip_count }}</strong></li>
+          </ul>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="mt-4">Detection Events ({{ events|length }})</h3>
+  <table class="table table-striped cm-table">
+    <thead>
+      <tr>
+        <th>Detector</th>
+        <th>Severity</th>
+        <th>Related User</th>
+        <th>Challenge</th>
+        <th>Detail</th>
+        <th>When</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for e in events %}
+      <tr>
+        <td><code>{{ e.detector }}</code></td>
+        <td>
+          <span class="badge badge-{{ 'danger' if e.severity >= 60 else 'warning' if e.severity >= 30 else 'secondary' }}">
+            {{ e.severity }}
+          </span>
+        </td>
+        <td>
+          {% if e.related_id %}
+            <a href="{{ url_for('anti_cheat.user_detail', user_id=e.related_id) }}">
+              {{ e.related }}
+            </a>
+          {% endif %}
+        </td>
+        <td>{{ e.challenge }}</td>
+        <td class="cm-detail">{{ e.detail }}</td>
+        <td class="text-muted small">{{ e.occurred_at }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="text-center text-muted">
+        No events for this user.
+      </td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 class="mt-4">Investigation Checklist</h3>
+  <div class="card">
+    <div class="card-body small">
+      <p>Before acting on a flag, sanity-check the following — most false
+         positives die in this list:</p>
+      <ul>
+        <li>Is the user on a shared corporate / university / household NAT?
+            Look at the IP overlap detail and check whether the "other"
+            accounts in the bucket are friends/family who registered with
+            similar names or addresses.</li>
+        <li>Does the user have organic failed attempts before their solves?
+            (Failure ratio above ≥ 0.4 strongly suggests real problem-solving.)</li>
+        <li>Are the simultaneous-solve hits all on the same trivial challenge
+            that several people happened to solve in the closing minutes?</li>
+        <li>Is the "identical wrong flag" the actual flag format like
+            <code>flag{}</code> or <code>CTF{test}</code> — a common
+            placeholder rather than copied work?</li>
+        <li>Did the suspect actually have admin contact (Discord/email) during
+            the event window? Sometimes "rare clean solve" = "they asked a
+            good clarifying question and got hint-level info."</li>
+        <li>Cross-reference with chat / scoreboard chatter logs if you have
+            them. Sudden surges often correlate with public hint releases.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
